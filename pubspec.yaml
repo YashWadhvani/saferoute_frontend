@@ -28,6 +28,7 @@ dependencies:
     geolocator: ^14.0.0
     geocoding: ^2.2.0
     location: ^5.0.0
+    flutter_compass: ^0.8.0
 
     # UI & Design
     google_fonts: ^6.1.0
@@ -62,6 +63,8 @@ flutter:
     uses-material-design: true
     assets:
         - assets/images/
+        - assets/fonts/
+        - assets/map_types/
         - assets/animations/
         - assets/icons/
         - .env

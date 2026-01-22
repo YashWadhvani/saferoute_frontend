@@ -1,20 +1,27 @@
 // lib/screens/routes/route_comparison_screen.dart
+// ignore_for_file: unused_import
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:geocoding/geocoding.dart';
+import 'package:provider/provider.dart';
+
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../models/route_model.dart';
 import '../../providers/route_provider.dart';
 import '../../widgets/common/route_card.dart';
-import '../navigation/active_navigation_screen.dart';
-import '../../services/google_places_service.dart';
+import '../navigation/navigation_screen.dart';
 
 class RouteComparisonScreen extends StatefulWidget {
   final LatLng currentLocation;
 
-  const RouteComparisonScreen({required this.currentLocation, super.key});
+  const RouteComparisonScreen({super.key, required this.currentLocation});
 
   @override
   State<RouteComparisonScreen> createState() => _RouteComparisonScreenState();
@@ -23,27 +30,86 @@ class RouteComparisonScreen extends StatefulWidget {
 class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
   LatLng? selectedDestination;
   GoogleMapController? mapController;
+
   Set<Marker> markers = {};
   Set<Polyline> polylines = {};
+
+  // Map type
   MapType _mapType = MapType.normal;
+  final List<MapType> _mapCycle = [
+    MapType.normal,
+    MapType.hybrid,
+    MapType.satellite,
+    MapType.terrain,
+  ];
+
+  // Search
   final TextEditingController _searchController = TextEditingController();
-  List<AutocompletePrediction> _predictions = [];
+  List<AutocompleteSuggestion> _suggestions = [];
+  bool _showSuggestions = false;
   bool _isSearching = false;
-  final GooglePlacesService _placesService = GooglePlacesService();
-  bool _isPanelMinimized = false;
-  double _panelHeight = 300;
+  Timer? _debounce;
+  String? _sessionToken;
 
   @override
   void initState() {
     super.initState();
-    _updateMarkers();
+    _generateSessionToken();
   }
 
   @override
   void dispose() {
-    mapController?.dispose();
     _searchController.dispose();
+    _debounce?.cancel();
+    mapController?.dispose();
     super.dispose();
+  }
+
+  // ---------------- SESSION TOKEN ----------------
+  void _generateSessionToken() {
+    final rnd = Random();
+    final bytes = List<int>.generate(16, (_) => rnd.nextInt(256));
+    _sessionToken = base64Url.encode(bytes).replaceAll('=', '');
+  }
+
+  // ---------------- RESET ----------------
+  void _resetDestinationAndRoutes() {
+    setState(() {
+      selectedDestination = null;
+      markers.clear();
+      polylines.clear();
+    });
+    context.read<RouteProvider>().clearRoutes();
+  }
+
+  // ---------------- MAP TAP ----------------
+  void _onMapTap(LatLng location) {
+    if (selectedDestination != null) {
+      final d = _distanceMeters(selectedDestination!, location);
+      if (d < 20) {
+        _resetDestinationAndRoutes();
+        return;
+      }
+    }
+
+    setState(() {
+      selectedDestination = location;
+      _updateMarkers();
+    });
+
+    _compareRoutes();
+  }
+
+  double _distanceMeters(LatLng a, LatLng b) {
+    const r = 6371000;
+    final dLat = (b.latitude - a.latitude) * pi / 180;
+    final dLng = (b.longitude - a.longitude) * pi / 180;
+    final h = sin(dLat / 2) * sin(dLat / 2) +
+        cos(a.latitude * pi / 180) *
+            cos(b.latitude * pi / 180) *
+            sin(dLng / 2) *
+            sin(dLng / 2);
+    return 2 * r * asin(sqrt(h));
   }
 
   void _updateMarkers() {
@@ -52,55 +118,45 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
         Marker(
           markerId: const MarkerId('destination'),
           position: selectedDestination!,
-          infoWindow: const InfoWindow(title: 'Destination'),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueRed,
-          ),
         ),
     };
   }
 
-  void _onMapTap(LatLng location) {
-    setState(() {
-      selectedDestination = location;
-      _updateMarkers();
-    });
-
-    if (selectedDestination != null) {
-      _compareRoutes();
-    }
-  }
-
+  // ---------------- ROUTES ----------------
   void _compareRoutes() {
-    final routeProvider = context.read<RouteProvider>();
-    routeProvider.compareRoutes(
-      widget.currentLocation,
-      selectedDestination!,
-    );
+    if (selectedDestination == null) return;
+    context
+        .read<RouteProvider>()
+        .compareRoutes(widget.currentLocation, selectedDestination!);
   }
 
   void _buildPolylines(List<RouteData> routes) {
     polylines.clear();
-    for (int i = 0; i < routes.length; i++) {
-      final route = routes[i];
-      final isSelected =
-          context.read<RouteProvider>().selectedRoute?.id == route.id;
+    final selectedId = context.read<RouteProvider>().selectedRoute?.id;
+
+    for (final route in routes) {
+      final isSelected = route.id == selectedId;
       polylines.add(
         Polyline(
           polylineId: PolylineId(route.id),
           points: route.decodedPoints,
-          color: _colorFromString(route.color).withAlpha(
-              isSelected ? (0.9 * 255).round() : (0.5 * 255).round()),
-          width: isSelected ? 8 : 5,
+          color:
+              _colorFromString(route.color).withAlpha(isSelected ? 220 : 120),
+          width: isSelected ? 7 : 5,
+          zIndex: isSelected ? 2 : 1,
+          consumeTapEvents: true,
+          onTap: () {
+            context.read<RouteProvider>().selectRoute(route);
+            _buildPolylines(routes);
+          },
         ),
       );
     }
+    setState(() {});
   }
 
-  Color _colorFromString(String colorStr) {
-    // Handle named colors first
-    final colorLower = colorStr.toLowerCase().trim();
-    switch (colorLower) {
+  Color _colorFromString(String c) {
+    switch (c.toLowerCase()) {
       case 'green':
         return AppColors.success;
       case 'yellow':
@@ -109,153 +165,154 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
         return Colors.orange;
       case 'red':
         return AppColors.danger;
-      case 'blue':
-        return AppColors.primary;
-      case 'gray':
-      case 'grey':
-        return Colors.grey;
       default:
-        break;
-    }
-
-    // Handle hex colors
-    String cleanHex = colorStr.replaceFirst('#', '').trim();
-    if (cleanHex.length == 6) {
-      try {
-        return Color(int.parse('FF$cleanHex', radix: 16));
-      } catch (e) {
         return AppColors.primary;
-      }
-    } else if (cleanHex.length == 8) {
-      try {
-        return Color(int.parse(cleanHex, radix: 16));
-      } catch (e) {
-        return AppColors.primary;
-      }
     }
-
-    return AppColors.primary;
   }
 
-  Future<void> _searchPlace(String query) async {
-    if (query.isEmpty) {
+  // ---------------- SEARCH ----------------
+  void _onSearchChanged(String q) {
+    _debounce?.cancel();
+
+    if (q.trim().isEmpty) {
+      _resetDestinationAndRoutes();
       setState(() {
-        _predictions = [];
-        _isSearching = false;
+        _suggestions.clear();
+        _showSuggestions = false;
       });
       return;
     }
 
-    setState(() => _isSearching = true);
-
-    try {
-      final predictions = await _placesService.autocomplete(query);
-      setState(() {
-        _predictions = predictions;
-        _isSearching = false;
-      });
-    } catch (e) {
-      setState(() {
-        _predictions = [];
-        _isSearching = false;
-      });
-    }
-  }
-
-  Future<void> _selectPrediction(AutocompletePrediction prediction) async {
-    _searchController.text = prediction.description ?? '';
     setState(() {
-      _predictions = [];
+      _isSearching = true;
+      _showSuggestions = true;
     });
 
-    if (prediction.placeId == null) return;
+    _debounce = Timer(const Duration(milliseconds: 400), () {
+      _fetchAutocomplete(q);
+    });
+  }
 
-    try {
-      final details = await _placesService.getPlaceDetails(prediction.placeId!);
-      if (details != null) {
-        final geometry = details['geometry'] as Map<String, dynamic>?;
-        if (geometry != null) {
-          final location = geometry['location'] as Map<String, dynamic>?;
-          if (location != null) {
-            final lat = location['lat'] as double?;
-            final lng = location['lng'] as double?;
-            if (lat != null && lng != null) {
-              final latLng = LatLng(lat, lng);
-              setState(() {
-                selectedDestination = latLng;
-                _updateMarkers();
-              });
-              mapController?.animateCamera(
-                CameraUpdate.newLatLngZoom(latLng, 15),
-              );
-              _compareRoutes();
-            }
+  Future<void> _fetchAutocomplete(String input) async {
+    final apiKey = dotenv.env['ROUTES_API_KEY'] ?? '';
+    if (apiKey.isEmpty) return;
+
+    final dio = Dio();
+    final res = await dio.post(
+      'https://places.googleapis.com/v1/places:autocomplete',
+      data: {
+        'input': input,
+        'sessionToken': _sessionToken,
+        'locationBias': {
+          'circle': {
+            'center': {
+              'latitude': widget.currentLocation.latitude,
+              'longitude': widget.currentLocation.longitude,
+            },
+            'radius': 50000.0
           }
         }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
-    }
-  }
+      },
+      options: Options(headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+      }),
+    );
 
-  String _getMapTypeLabel() {
-    switch (_mapType) {
-      case MapType.normal:
-        return 'Normal';
-      case MapType.hybrid:
-        return 'Hybrid';
-      case MapType.satellite:
-        return 'Satellite';
-      case MapType.terrain:
-        return 'Terrain';
-      default:
-        return 'Normal';
-    }
-  }
-
-  IconData _getMapTypeIcon() {
-    switch (_mapType) {
-      case MapType.normal:
-        return Icons.map;
-      case MapType.hybrid:
-        return Icons.map_outlined;
-      case MapType.satellite:
-        return Icons.satellite_alt;
-      case MapType.terrain:
-        return Icons.terrain;
-      default:
-        return Icons.map;
-    }
-  }
-
-  void _cycleMapType() {
     setState(() {
-      _mapType = _mapType == MapType.normal
-          ? MapType.hybrid
-          : _mapType == MapType.hybrid
-              ? MapType.satellite
-              : _mapType == MapType.satellite
-                  ? MapType.terrain
-                  : MapType.normal;
+      _suggestions = (res.data['suggestions'] as List? ?? [])
+          .map((e) => AutocompleteSuggestion.fromJson(e))
+          .where((s) => s.placeId.isNotEmpty)
+          .toList();
+      _isSearching = false;
     });
   }
 
+  Future<void> _onSuggestionSelected(AutocompleteSuggestion s) async {
+    setState(() {
+      _searchController.text = s.mainText;
+      _showSuggestions = false;
+      _isSearching = true;
+    });
+
+    final apiKey = dotenv.env['ROUTES_API_KEY'] ?? '';
+    final dio = Dio();
+
+    final res = await dio.get(
+      'https://places.googleapis.com/v1/places/${s.placeId}',
+      options: Options(headers: {
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': 'id,displayName,formattedAddress,location',
+      }),
+    );
+
+    final loc = res.data['location'];
+    final lat = (loc['latitude'] as num).toDouble();
+    final lng = (loc['longitude'] as num).toDouble();
+
+    setState(() {
+      selectedDestination = LatLng(lat, lng);
+      _updateMarkers();
+      _isSearching = false;
+    });
+
+    _generateSessionToken();
+    mapController?.animateCamera(
+      CameraUpdate.newLatLngZoom(selectedDestination!, 15),
+    );
+
+    _compareRoutes();
+  }
+
+  // ---------------- MAP TYPE ----------------
+  void _rotateMapType() {
+    final i = _mapCycle.indexOf(_mapType);
+    setState(() {
+      _mapType = _mapCycle[(i + 1) % _mapCycle.length];
+    });
+  }
+
+  Widget _mapTypePreview() {
+    String asset;
+
+    switch (_mapType) {
+      case MapType.hybrid:
+        asset = 'assets/map_types/hybrid.png';
+        break;
+      case MapType.satellite:
+        asset = 'assets/map_types/satellite.png';
+        break;
+      case MapType.terrain:
+        asset = 'assets/map_types/terrain.png';
+        break;
+      default:
+        asset = 'assets/map_types/normal.png';
+    }
+
+    return Expanded(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.asset(
+          asset,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) {
+            // fallback if asset still fails
+            return const Icon(Icons.layers, color: AppColors.primary);
+          },
+        ),
+      ),
+    );
+  }
+
+  // ---------------- UI ----------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Find Safe Route'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('Find Safe Route')),
       body: Stack(
         children: [
-          // Google Map
           GoogleMap(
-            onMapCreated: (controller) => mapController = controller,
+            onMapCreated: (c) => mapController = c,
             initialCameraPosition: CameraPosition(
               target: widget.currentLocation,
               zoom: 14,
@@ -264,335 +321,143 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
             markers: markers,
             polylines: polylines,
             onTap: _onMapTap,
-            myLocationEnabled: true,
-            myLocationButtonEnabled: true,
+            // 🔥 REMOVE DEFAULT CONTROLS
+            myLocationEnabled: true, // keeps blue dot
+            myLocationButtonEnabled: false, // removes target button
+            zoomControlsEnabled: false, // removes + / − buttons
+            compassEnabled: false, // removes compass (optional)
+            mapToolbarEnabled: false, // removes directions toolbar
+            rotateGesturesEnabled: true,
+            tiltGesturesEnabled: true,
+            trafficEnabled: true,
+            buildingsEnabled: true,
+            padding: const EdgeInsets.only(bottom: 300),
           ),
 
-          // Search Bar
+          // Search bar
           Positioned(
             top: 16,
             left: 16,
-            right: 100,
+            right: 80,
             child: Column(
               children: [
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withAlpha((0.1 * 255).round()),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: TextField(
-                    controller: _searchController,
-                    decoration: InputDecoration(
-                      hintText: 'Search destination',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: _searchController.text.isNotEmpty
-                          ? IconButton(
-                              icon: const Icon(Icons.clear),
-                              onPressed: () {
-                                _searchController.clear();
-                                setState(() {
-                                  _predictions = [];
-                                });
-                              },
-                            )
-                          : null,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
-                      ),
-                      filled: true,
-                      fillColor: Colors.white,
-                    ),
-                    onChanged: _searchPlace,
-                    textInputAction: TextInputAction.search,
-                    onSubmitted: (value) async {
-                      if (value.trim().isEmpty) return;
-
-                      setState(() {
-                        _predictions = [];
-                      });
-
-                      try {
-                        final locations = await locationFromAddress(value);
-                        if (locations.isNotEmpty) {
-                          final location = locations.first;
-                          final latLng =
-                              LatLng(location.latitude, location.longitude);
-                          setState(() {
-                            selectedDestination = latLng;
-                            _updateMarkers();
-                          });
-                          mapController?.animateCamera(
-                            CameraUpdate.newLatLngZoom(latLng, 15),
-                          );
-                          _compareRoutes();
-                        }
-                      } catch (e) {
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Location not found')),
-                          );
-                        }
-                      }
-                    },
+                TextField(
+                  controller: _searchController,
+                  onChanged: _onSearchChanged,
+                  decoration: InputDecoration(
+                    hintText: 'Search destination...',
+                    filled: true,
+                    fillColor: Colors.white,
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _searchController.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: _resetDestinationAndRoutes,
+                          )
+                        : null,
                   ),
                 ),
-                if (_predictions.isNotEmpty)
+                if (_showSuggestions)
                   Container(
-                    margin: const EdgeInsets.only(top: 8),
-                    constraints: const BoxConstraints(maxHeight: 200),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withAlpha((0.1 * 255).round()),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: _predictions.length,
-                      itemBuilder: (context, index) {
-                        final prediction = _predictions[index];
-                        return ListTile(
-                          leading: const Icon(Icons.location_on, size: 20),
-                          title: Text(
-                            prediction.description ?? '',
-                            style: const TextStyle(fontSize: 14),
+                    color: Colors.white,
+                    constraints: const BoxConstraints(maxHeight: 300),
+                    child: _isSearching
+                        ? const Padding(
+                            padding: EdgeInsets.all(16),
+                            child: CircularProgressIndicator(),
+                          )
+                        : ListView.builder(
+                            shrinkWrap: true,
+                            itemCount: _suggestions.length,
+                            itemBuilder: (_, i) {
+                              final s = _suggestions[i];
+                              return ListTile(
+                                title: Text(s.mainText),
+                                subtitle: s.secondaryText.isNotEmpty
+                                    ? Text(s.secondaryText)
+                                    : null,
+                                onTap: () => _onSuggestionSelected(s),
+                              );
+                            },
                           ),
-                          onTap: () => _selectPrediction(prediction),
-                        );
-                      },
-                    ),
                   ),
               ],
             ),
           ),
 
-          // Map Type Toggle with Preview Icon
+          // Map type toggle
           Positioned(
             top: 16,
             right: 16,
-            child: Column(
-              children: [
-                GestureDetector(
-                  onTap: _cycleMapType,
-                  child: Container(
-                    width: 56,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withAlpha((0.15 * 255).round()),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Icon(
-                      _getMapTypeIcon(),
-                      color: AppColors.primary,
-                      size: 28,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(8),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withAlpha((0.1 * 255).round()),
-                        blurRadius: 4,
-                        offset: const Offset(0, 1),
-                      ),
-                    ],
-                  ),
-                  child: Text(
-                    _getMapTypeLabel(),
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Instructions
-          if (selectedDestination == null && _predictions.isEmpty)
-            Positioned(
-              top: 100,
-              left: 20,
-              right: 20,
+            child: GestureDetector(
+              onTap: _rotateMapType,
               child: Container(
-                padding: const EdgeInsets.all(16),
+                width: 50,
+                height: 50, // ✅ same as search bar
+                padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
-                  color: AppColors.primary,
+                  color: Colors.white,
                   borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
+                  boxShadow: const [
                     BoxShadow(
-                      color: AppColors.primary.withAlpha((0.3 * 255).round()),
                       blurRadius: 8,
-                      offset: const Offset(0, 2),
+                      color: Colors.black26,
                     ),
                   ],
                 ),
-                child: Text(
-                  'Search or tap on the map to select destination',
-                  style: AppTextStyles.bodyMedium.copyWith(color: Colors.white),
-                  textAlign: TextAlign.center,
-                ),
+                child: _mapTypePreview(),
               ),
             ),
+          ),
 
-          // Routes Bottom Drawer
+          // Routes drawer
           Consumer<RouteProvider>(
-            builder: (context, routeProvider, _) {
-              if (!routeProvider.isLoading && routeProvider.routes.isEmpty) {
-                return const SizedBox.shrink();
+            builder: (_, rp, __) {
+              if (rp.routes.isNotEmpty) {
+                WidgetsBinding.instance.addPostFrameCallback(
+                  (_) => _buildPolylines(rp.routes),
+                );
               }
 
-              if (routeProvider.routes.isNotEmpty) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _buildPolylines(routeProvider.routes);
-                  if (mounted) setState(() {});
-                });
-              }
-
-              final height = _isPanelMinimized ? 80.0 : _panelHeight;
+              if (rp.routes.isEmpty) return const SizedBox();
 
               return Positioned(
                 bottom: 0,
                 left: 0,
                 right: 0,
-                child: GestureDetector(
-                  onVerticalDragUpdate: (details) {
-                    if (!_isPanelMinimized) {
-                      setState(() {
-                        _panelHeight = (_panelHeight - details.delta.dy)
-                            .clamp(200.0, 500.0);
-                      });
-                    }
-                  },
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    height: height,
-                    child: Material(
-                      elevation: 12,
-                      borderRadius: const BorderRadius.vertical(
-                        top: Radius.circular(20),
-                      ),
-                      child: Column(
-                        children: [
-                          InkWell(
-                            onTap: () {
-                              setState(() {
-                                _isPanelMinimized = !_isPanelMinimized;
-                              });
+                child: Material(
+                  elevation: 12,
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(20)),
+                  color: Colors.white,
+                  child: SizedBox(
+                    height: 300,
+                    child: ListView.builder(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      itemCount: rp.routes.length,
+                      itemBuilder: (_, i) {
+                        final r = rp.routes[i];
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 4),
+                          child: RouteCard(
+                            route: r,
+                            isSelected: rp.selectedRoute?.id == r.id,
+                            onTap: () => rp.selectRoute(r),
+                            onStart: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => NavigationScreen(
+                                    start: widget.currentLocation,
+                                    route: r,
+                                  ),
+                                ),
+                              );
                             },
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              child: Column(
-                                children: [
-                                  Container(
-                                    width: 48,
-                                    height: 5,
-                                    decoration: BoxDecoration(
-                                      color: Colors.grey[300],
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 16),
-                                    child: Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Text(
-                                          '${routeProvider.routes.length} Routes Available',
-                                          style: AppTextStyles.titleMedium,
-                                        ),
-                                        Icon(
-                                          _isPanelMinimized
-                                              ? Icons.expand_less
-                                              : Icons.expand_more,
-                                          color: AppColors.onSurface,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
                           ),
-                          if (!_isPanelMinimized) const Divider(height: 1),
-                          if (!_isPanelMinimized)
-                            Expanded(
-                              child: routeProvider.isLoading
-                                  ? const Center(
-                                      child: CircularProgressIndicator())
-                                  : routeProvider.error != null
-                                      ? Center(
-                                          child: Text(routeProvider.error!))
-                                      : ListView.builder(
-                                          padding:
-                                              const EdgeInsets.only(bottom: 16),
-                                          itemCount:
-                                              routeProvider.routes.length,
-                                          itemBuilder: (context, index) {
-                                            final route =
-                                                routeProvider.routes[index];
-                                            return RouteCard(
-                                              route: route,
-                                              isSelected: routeProvider
-                                                      .selectedRoute?.id ==
-                                                  route.id,
-                                              onTap: () {
-                                                routeProvider
-                                                    .selectRoute(route);
-                                                _buildPolylines(
-                                                    routeProvider.routes);
-                                                setState(() {});
-                                              },
-                                              onStart: () {
-                                                Navigator.push(
-                                                  context,
-                                                  MaterialPageRoute(
-                                                    builder: (_) =>
-                                                        ActiveNavigationScreen(
-                                                      start: widget
-                                                          .currentLocation,
-                                                      route: route,
-                                                    ),
-                                                  ),
-                                                );
-                                              },
-                                            );
-                                          },
-                                        ),
-                            ),
-                        ],
-                      ),
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -601,6 +466,31 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ---------------- MODEL ----------------
+class AutocompleteSuggestion {
+  final String placeId;
+  final String mainText;
+  final String secondaryText;
+  final List<String> types;
+
+  AutocompleteSuggestion({
+    required this.placeId,
+    required this.mainText,
+    required this.secondaryText,
+    required this.types,
+  });
+
+  factory AutocompleteSuggestion.fromJson(Map<String, dynamic> json) {
+    final p = json['placePrediction'] ?? {};
+    return AutocompleteSuggestion(
+      placeId: p['placeId'] ?? '',
+      mainText: p['structuredFormat']?['mainText']?['text'] ?? '',
+      secondaryText: p['structuredFormat']?['secondaryText']?['text'] ?? '',
+      types: (p['types'] as List?)?.map((e) => e.toString()).toList() ?? [],
     );
   }
 }

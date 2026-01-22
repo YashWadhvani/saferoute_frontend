@@ -14,6 +14,7 @@ analyzer:
         prefer_final_fields: ignore
         unused_import: ignore
         deprecated_member_use: ignore
+        unused_element: ignore
 include: package:flutter_lints/flutter.yaml
 
 linter:
