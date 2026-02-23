@@ -10,6 +10,7 @@ import 'providers/route_provider.dart';
 import 'providers/sos_provider.dart';
 import 'providers/report_provider.dart';
 import 'providers/safety_provider.dart';
+import 'providers/pothole_provider.dart';
 import 'screens/splash_screen.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/home/home_screen.dart';
@@ -17,6 +18,7 @@ import 'screens/profile/profile_screen.dart';
 import 'screens/heatmap/heatmap_screen.dart';
 import 'screens/reports/reports_screen.dart';
 import 'screens/settings/settings_screen.dart';
+import 'screens/pothole/pothole_detection_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -59,6 +61,10 @@ class SafeRouteApp extends StatelessWidget {
           create: (_) => SafetyProvider(),
           update: (_, auth, safety) => safety ?? SafetyProvider(),
         ),
+        ChangeNotifierProxyProvider<AuthProvider, PotholeProvider>(
+          create: (_) => PotholeProvider(),
+          update: (_, auth, pothole) => pothole ?? PotholeProvider(),
+        )
       ],
       child: MaterialApp(
         title: 'SafeRoute',
@@ -74,6 +80,7 @@ class SafeRouteApp extends StatelessWidget {
           '/heatmap': (_) => const HeatmapScreen(),
           '/reports': (_) => const ReportsScreen(),
           '/settings': (_) => const SettingsScreen(),
+          '/pothole-detection': (_) => const PotholeDetectionScreen(),
         },
       ),
     );

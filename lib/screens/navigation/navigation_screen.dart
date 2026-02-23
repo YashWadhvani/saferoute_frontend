@@ -6,9 +6,11 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_compass/flutter_compass.dart';
+import 'package:provider/provider.dart';
 import '../../models/route_model.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/app_colors.dart';
+import '../../providers/pothole_provider.dart';
 
 class NavigationScreen extends StatefulWidget {
   final LatLng start;
@@ -38,17 +40,59 @@ class _NavigationScreenState extends State<NavigationScreen> {
   bool _useSimulation = false; // Set to false for real GPS
   MapType _mapType = MapType.hybrid;
   bool _showMapTypeSelector = false;
+  bool _isPotholeDetectionEnabled = true;
 
   BitmapDescriptor? _carIcon;
+  late PotholeProvider _potholeProvider;
 
   @override
   void initState() {
     super.initState();
+    _potholeProvider = context.read<PotholeProvider>();
     _tts = FlutterTts();
     _tts.setLanguage('en-US');
     _setupMapElements();
     _loadCarIcon();
+    if (_isPotholeDetectionEnabled) {
+      _startPotholeDetection();
+    }
     _startNavigation();
+  }
+
+  Future<void> _startPotholeDetection() async {
+    try {
+      await _potholeProvider.startDetection();
+    } catch (e) {
+      debugPrint('Failed to start pothole detection in navigation: $e');
+    }
+  }
+
+  Future<void> _togglePotholeDetection(bool enabled) async {
+    setState(() {
+      _isPotholeDetectionEnabled = enabled;
+    });
+
+    if (enabled) {
+      await _startPotholeDetection();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Pothole detection enabled'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } else {
+      _potholeProvider.stopDetection();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Pothole detection disabled'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _loadCarIcon() async {
@@ -67,6 +111,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
   @override
   void dispose() {
+    _potholeProvider.stopDetection();
     _positionStream?.cancel();
     _compassStream?.cancel();
     _tts.stop();
@@ -545,6 +590,42 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
                       const SizedBox(height: 16),
 
+                      // Pothole Detection Toggle
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.surface,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppColors.outline),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.sensors,
+                              color: AppColors.primary,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Pothole Detection',
+                                style: AppTextStyles.titleSmall,
+                              ),
+                            ),
+                            Switch.adaptive(
+                              value: _isPotholeDetectionEnabled,
+                              onChanged: _togglePotholeDetection,
+                              activeColor: AppColors.primary,
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 16),
+
                       // Stats
                       Row(
                         children: [
@@ -561,6 +642,18 @@ class _NavigationScreenState extends State<NavigationScreen> {
                               'Safety',
                               widget.route.safetyScore.toStringAsFixed(1),
                               Icons.shield,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Consumer<PotholeProvider>(
+                              builder: (context, potholeProvider, _) {
+                                return _buildStatCard(
+                                  'Potholes',
+                                  '${potholeProvider.detectedCount}',
+                                  Icons.warning_amber,
+                                );
+                              },
                             ),
                           ),
                         ],

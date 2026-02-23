@@ -48,6 +48,9 @@ dependencies:
     flutter_contacts: ^1.1.9
     permission_handler: ^12.0.0
 
+    # Sensors
+    sensors_plus: ^7.0.0
+
     # Image Picker
     image_picker: ^0.8.7
 

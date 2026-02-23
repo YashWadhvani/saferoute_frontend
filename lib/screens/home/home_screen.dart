@@ -74,6 +74,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final bottomPadding =
+        (MediaQuery.of(context).size.height * 0.12).clamp(80.0, 140.0);
     return Scaffold(
       body: Stack(
         children: [
@@ -93,22 +95,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
           // Main Content
           SafeArea(
-            child: Column(
-              children: [
-                // Header
-                _buildHeader(),
+            child: SingleChildScrollView(
+              padding: EdgeInsets.only(bottom: bottomPadding),
+              child: Column(
+                children: [
+                  // Header
+                  _buildHeader(),
 
-                // KPIs Section
-                _buildKPIsSection(),
+                  // KPIs Section
+                  _buildKPIsSection(),
 
-                // Quick Actions
-                _buildActionsSection(),
+                  // Quick Actions
+                  _buildActionsSection(),
 
-                // Recent Routes
-                Expanded(
-                  child: _buildRoutesSection(),
-                ),
-              ],
+                  // Recent Routes
+                  _buildRoutesSection(),
+                ],
+              ),
             ),
           ),
 
@@ -213,6 +216,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   const PopupMenuItem(
+                    value: 'pothole_detection',
+                    child: Row(
+                      children: [
+                        Icon(Icons.warning_amber),
+                        SizedBox(width: 8),
+                        Text('Pothole Detection'),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuItem(
                     value: 'logout',
                     child: Row(
                       children: [
@@ -235,6 +248,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.of(context).pushNamed('/profile');
               } else if (value == 'settings') {
                 Navigator.of(context).pushNamed('/settings');
+              } else if (value == 'pothole_detection') {
+                Navigator.of(context).pushNamed('/pothole-detection');
               }
             },
             child: Container(
@@ -339,33 +354,38 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           Text('Quick Actions', style: AppTextStyles.titleLarge),
           const SizedBox(height: 12),
-          Row(
+          GridView.count(
+            crossAxisCount: 2,
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 12,
+            childAspectRatio: 1.8,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
             children: [
-              Expanded(
-                child: _buildActionButton(
-                  icon: Icons.map_outlined,
-                  label: 'Heatmap',
-                  onTap: () => Navigator.of(context).pushNamed('/heatmap'),
-                  color: AppColors.warning,
-                ),
+              _buildActionButton(
+                icon: Icons.map_outlined,
+                label: 'Heatmap',
+                onTap: () => Navigator.of(context).pushNamed('/heatmap'),
+                color: AppColors.warning,
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildActionButton(
-                  icon: Icons.warning_amber_rounded,
-                  label: 'Reports',
-                  onTap: () => Navigator.of(context).pushNamed('/reports'),
-                  color: AppColors.danger,
-                ),
+              _buildActionButton(
+                icon: Icons.warning_amber_rounded,
+                label: 'Reports',
+                onTap: () => Navigator.of(context).pushNamed('/reports'),
+                color: AppColors.danger,
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildActionButton(
-                  icon: Icons.people,
-                  label: 'Contacts',
-                  onTap: () => Navigator.of(context).pushNamed('/profile'),
-                  color: AppColors.info,
-                ),
+              _buildActionButton(
+                icon: Icons.people,
+                label: 'Contacts',
+                onTap: () => Navigator.of(context).pushNamed('/profile'),
+                color: AppColors.info,
+              ),
+              _buildActionButton(
+                icon: Icons.sensors,
+                label: 'Potholes',
+                onTap: () =>
+                    Navigator.of(context).pushNamed('/pothole-detection'),
+                color: AppColors.primary,
               ),
             ],
           ),
@@ -383,7 +403,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14),
+        padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(14),
@@ -395,17 +415,21 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Container(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
                 color: color.withAlpha((0.1 * 255).round()),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(icon, color: color, size: 24),
+              child: Icon(icon, color: color, size: 22),
             ),
-            const SizedBox(height: 6),
-            Text(label, style: AppTextStyles.labelSmall),
+            const SizedBox(height: 4),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(label, style: AppTextStyles.labelSmall),
+            ),
           ],
         ),
       ),
@@ -420,12 +444,9 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           Text('Recent Searches', style: AppTextStyles.titleLarge),
           const SizedBox(height: 12),
-          Expanded(
-            child: recentRoutes.isEmpty
-                ? _buildEmptyRoutesPlaceholder()
-                : _buildRecentRoutesList(),
-          ),
-          const SizedBox(height: 80), // Bottom spacing for FAB
+          recentRoutes.isEmpty
+              ? _buildEmptyRoutesPlaceholder()
+              : _buildRecentRoutesList(),
         ],
       ),
     );
@@ -468,6 +489,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildRecentRoutesList() {
     return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
       itemCount: recentRoutes.length,
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, index) {

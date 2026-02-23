@@ -7,6 +7,7 @@ import 'package:smooth_page_indicator/smooth_page_indicator.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/pothole_provider.dart';
 import '../../widgets/common/gradient_button.dart';
 import '../../widgets/common/app_text_field.dart';
 import 'package:animations/animations.dart';
@@ -84,6 +85,11 @@ class _LoginScreenState extends State<LoginScreen> {
     );
 
     if (mounted && success) {
+      final authToken = authProvider.token;
+      if (authToken != null && authToken.isNotEmpty) {
+        final potholeProvider = context.read<PotholeProvider>();
+        potholeProvider.setAuthToken(authToken);
+      }
       Navigator.of(context).pushReplacementNamed('/home');
     } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

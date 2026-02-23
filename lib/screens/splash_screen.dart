@@ -3,6 +3,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_text_styles.dart';
 import '../providers/auth_provider.dart';
@@ -20,7 +21,36 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    _checkAuthStatus();
+    _initializeApp();
+  }
+
+  Future<void> _initializeApp() async {
+    await _requestStartupPermissions();
+    await _checkAuthStatus();
+  }
+
+  Future<void> _requestStartupPermissions() async {
+    final statuses = await [
+      Permission.contacts,
+      Permission.location,
+      Permission.locationWhenInUse,
+      Permission.activityRecognition,
+      Permission.sensors,
+    ].request();
+
+    final hasDenied = statuses.values
+        .any((status) => status.isDenied || status.isPermanentlyDenied);
+
+    if (hasDenied && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Please allow Contacts, Location, Activity, and Sensors for full app features.',
+          ),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   Future<void> _checkAuthStatus() async {
