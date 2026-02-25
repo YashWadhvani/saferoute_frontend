@@ -1,6 +1,8 @@
 // lib/providers/pothole_provider.dart
 import 'package:flutter/material.dart';
+import '../models/detection_event.dart';
 import '../models/pothole_model.dart';
+import '../services/detection_event_store.dart';
 import '../services/pothole_service.dart';
 import '../services/pothole_detection_service.dart';
 
@@ -59,6 +61,48 @@ class PotholeProvider with ChangeNotifier {
     _detectionService.stopDetection();
     _isDetecting = false;
     notifyListeners();
+  }
+
+  Future<List<DetectionEvent>> getLocalDetectionEvents() async {
+    await DetectionEventStore.ensureInitialized();
+    return DetectionEventStore.getAllEvents();
+  }
+
+  Future<void> updateDetectionLabel({
+    required String eventId,
+    required String label,
+  }) async {
+    await DetectionEventStore.ensureInitialized();
+    await DetectionEventStore.updateLabel(eventId, label);
+    notifyListeners();
+  }
+
+  Future<bool> submitReviewedDetection({
+    required String eventId,
+    required String type,
+  }) async {
+    await DetectionEventStore.ensureInitialized();
+    final event = DetectionEventStore.getEventById(eventId);
+    if (event == null) {
+      _error = 'Detection event not found';
+      notifyListeners();
+      return false;
+    }
+
+    final response = await _potholeService.submitReviewedDetection(
+      event: event,
+      type: type,
+    );
+
+    if (response.isSuccess) {
+      _error = null;
+      notifyListeners();
+      return true;
+    }
+
+    _error = response.error ?? 'Failed to submit reviewed detection';
+    notifyListeners();
+    return false;
   }
 
   /// Fetch potholes in bounding box

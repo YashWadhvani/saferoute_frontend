@@ -5,6 +5,8 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../providers/pothole_provider.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import 'detection_review_screen.dart';
+import 'pothole_sensor_debug_screen.dart';
 
 class PotholeDetectionScreen extends StatefulWidget {
   const PotholeDetectionScreen({super.key});
@@ -33,6 +35,7 @@ class _PotholeDetectionScreenState extends State<PotholeDetectionScreen> {
     final statuses = await [
       Permission.location,
       Permission.sensors,
+      Permission.notification,
     ].request();
 
     if (statuses[Permission.location]!.isDenied ||
@@ -100,6 +103,15 @@ class _PotholeDetectionScreenState extends State<PotholeDetectionScreen> {
                 // Detection Status Card
                 _buildDetectionCard(provider),
 
+                const SizedBox(height: 16),
+
+                // Sensor Debug View
+                _buildSensorDebugCard(),
+
+                const SizedBox(height: 24),
+
+                _buildDetectionReviewCard(),
+
                 const SizedBox(height: 24),
 
                 // How It Works
@@ -118,6 +130,49 @@ class _PotholeDetectionScreenState extends State<PotholeDetectionScreen> {
             ),
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildSensorDebugCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.outline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Sensor Debug',
+            style: AppTextStyles.titleMedium.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'See raw accelerometer, gyroscope and GPS values before tuning thresholds.',
+            style: AppTextStyles.bodySmall.copyWith(
+              color: AppColors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const PotholeSensorDebugScreen(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.analytics_outlined),
+            label: const Text('Open Live Sensor Data'),
+          ),
+        ],
       ),
     );
   }
@@ -225,6 +280,49 @@ class _PotholeDetectionScreenState extends State<PotholeDetectionScreen> {
     );
   }
 
+  Widget _buildDetectionReviewCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.outline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Detection Review',
+            style: AppTextStyles.titleMedium.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Review locally stored candidate events on an OpenStreetMap view and label them.',
+            style: AppTextStyles.bodySmall.copyWith(
+              color: AppColors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const DetectionReviewScreen(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.map_outlined),
+            label: const Text('Open Detection Review'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildHowItWorksCard() {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -269,8 +367,8 @@ class _PotholeDetectionScreenState extends State<PotholeDetectionScreen> {
           const SizedBox(height: 12),
           _buildInfoItem(
             Icons.timeline,
-            'Smart Algorithm',
-            'Filters false positives using AI',
+            'Threshold-Based Detection',
+            'Uses accelerometer + gyroscope thresholds (no ML yet)',
           ),
         ],
       ),

@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 
 import '../core/api/api_client.dart';
 import '../core/api/api_response.dart';
+import '../models/detection_event.dart';
 import '../models/pothole_model.dart';
 
 class PotholeService {
@@ -89,6 +90,37 @@ class PotholeService {
           'intensity': intensity,
         },
       );
+      return ApiResponse.success(true);
+    } on DioException catch (e) {
+      return ApiResponse.fromException(e);
+    }
+  }
+
+  Future<ApiResponse<bool>> submitReviewedDetection({
+    required DetectionEvent event,
+    required String type,
+  }) async {
+    try {
+      final severityScore = event.severityScore;
+      final confidence = event.confidence;
+
+      await _dio.post(
+        '/potholes',
+        data: {
+          'latitude': event.latitude,
+          'longitude': event.longitude,
+          'severity_score': severityScore,
+          'intensity': severityScore,
+          'type': type,
+          'confidence': confidence,
+          'sensor_metadata': {
+            'accel_spike': event.accelSpike,
+            'gyro_peak': event.gyroPeak,
+            'speed_kmph': event.speedKmph,
+          },
+        },
+      );
+
       return ApiResponse.success(true);
     } on DioException catch (e) {
       return ApiResponse.fromException(e);

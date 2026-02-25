@@ -40,7 +40,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
   bool _useSimulation = false; // Set to false for real GPS
   MapType _mapType = MapType.hybrid;
   bool _showMapTypeSelector = false;
-  bool _isPotholeDetectionEnabled = true;
+  bool _isPotholeDetectionEnabled = false;
 
   BitmapDescriptor? _carIcon;
   late PotholeProvider _potholeProvider;
@@ -53,9 +53,6 @@ class _NavigationScreenState extends State<NavigationScreen> {
     _tts.setLanguage('en-US');
     _setupMapElements();
     _loadCarIcon();
-    if (_isPotholeDetectionEnabled) {
-      _startPotholeDetection();
-    }
     _startNavigation();
   }
 
