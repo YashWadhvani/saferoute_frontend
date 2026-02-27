@@ -75,6 +75,14 @@ class RouteCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final fastestDelta = route.saferThanFastestPercent ?? 0;
+    final shortestDelta = route.saferThanShortestPercent ?? 0;
+    final showSafestComparison = route.tags.contains('safest') &&
+        ((route.saferThanFastestPercent != null &&
+                fastestDelta.abs() >= 0.05) ||
+            (route.saferThanShortestPercent != null &&
+                shortestDelta.abs() >= 0.05));
+
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -233,6 +241,55 @@ class RouteCard extends StatelessWidget {
             ),
 
             const SizedBox(height: 12),
+
+            // Comparative analysis (including vs excluding potholes)
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.outlineVariant),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'With potholes: ${route.safetyScoreIncludingPotholes.toStringAsFixed(2)} • Without: ${route.safetyScoreExcludingPotholes.toStringAsFixed(2)}',
+                    style: AppTextStyles.labelSmall.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Potholes: ${route.potholeCount} • Intensity: ${route.potholeIntensity.toStringAsFixed(2)}/km',
+                    style: AppTextStyles.labelSmall,
+                  ),
+                ],
+              ),
+            ),
+
+            if (showSafestComparison) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.success.withAlpha((0.08 * 255).round()),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: AppColors.success.withAlpha((0.25 * 255).round()),
+                  ),
+                ),
+                child: Text(
+                  'This route is '
+                  '${fastestDelta.toStringAsFixed(1)}% safer than fastest '
+                  'and ${shortestDelta.toStringAsFixed(1)}% safer than shortest.',
+                  style: AppTextStyles.labelSmall.copyWith(
+                    color: AppColors.success,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
 
             // Start Navigation Button
             SizedBox(

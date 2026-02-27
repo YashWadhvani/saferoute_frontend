@@ -29,10 +29,14 @@ class _NavigationScreenState extends State<NavigationScreen> {
   late FlutterTts _tts;
 
   Position? _currentPosition;
+  Position? _initialPosition;
   int _currentPointIndex = 0;
   double _distanceToNext = 0;
   double _remainingDistance = 0;
   String _currentInstruction = 'Starting navigation...';
+  bool _hasStartedMoving = false;
+  bool _hasAnnouncedArrival = false;
+  bool _bottomPanelCollapsed = false;
 
   StreamSubscription<Position>? _positionStream;
   StreamSubscription<CompassEvent>? _compassStream;
@@ -217,6 +221,20 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   void _onPositionUpdate(Position position) {
+    _initialPosition ??= position;
+
+    if (_initialPosition != null && !_hasStartedMoving) {
+      final movedMeters = Geolocator.distanceBetween(
+        _initialPosition!.latitude,
+        _initialPosition!.longitude,
+        position.latitude,
+        position.longitude,
+      );
+      if (movedMeters >= 20 || position.speed >= 1.5) {
+        _hasStartedMoving = true;
+      }
+    }
+
     setState(() {
       _currentPosition = position;
     });
@@ -236,12 +254,35 @@ class _NavigationScreenState extends State<NavigationScreen> {
       _currentPosition!.latitude,
       _currentPosition!.longitude,
     );
+    final destination = points.last;
+
+    final distanceToDestination = Geolocator.distanceBetween(
+      currentLatLng.latitude,
+      currentLatLng.longitude,
+      destination.latitude,
+      destination.longitude,
+    );
+
+    // Only mark arrival after actual movement and close proximity to destination
+    if (_hasStartedMoving && distanceToDestination <= 25) {
+      _currentInstruction = 'You have arrived at your destination';
+      _distanceToNext = 0;
+      _remainingDistance = 0;
+      _currentPointIndex = points.length - 1;
+      _updateRoutePolyline();
+
+      if (!_hasAnnouncedArrival) {
+        _hasAnnouncedArrival = true;
+        _tts.speak(_currentInstruction);
+      }
+      return;
+    }
 
     // Find nearest point on route
     double minDistance = double.infinity;
     int nearestIndex = _currentPointIndex;
 
-    for (int i = _currentPointIndex; i < points.length; i++) {
+    for (int i = 0; i < points.length; i++) {
       final distance = Geolocator.distanceBetween(
         currentLatLng.latitude,
         currentLatLng.longitude,
@@ -283,9 +324,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
       // Update route polyline to show progress
       _updateRoutePolyline();
     } else {
-      // Reached destination
-      _currentInstruction = 'You have arrived at your destination';
-      _tts.speak(_currentInstruction);
+      // Close to final path point but not necessarily arrived physically
+      _currentInstruction = _hasStartedMoving
+          ? 'Continue to destination'
+          : 'Start moving to begin navigation';
       _distanceToNext = 0;
       _remainingDistance = 0;
     }
@@ -438,6 +480,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        title: const Text('Find Safe Route'),
+        elevation: 0,
+        backgroundColor: Colors.white,
+      ),
       body: Stack(
         children: [
           // Map
@@ -457,9 +504,70 @@ class _NavigationScreenState extends State<NavigationScreen> {
             tiltGesturesEnabled: true,
           ),
 
+          // Top navigation glass panel
+          Positioned(
+            top: 12,
+            left: 12,
+            right: 84,
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.white.withAlpha((0.92 * 255).round()),
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withAlpha((0.12 * 255).round()),
+                    blurRadius: 16,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withAlpha((0.12 * 255).round()),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      _getInstructionIcon(),
+                      color: AppColors.primary,
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _currentInstruction,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTextStyles.titleSmall.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _formatDistance(_distanceToNext),
+                          style: AppTextStyles.labelSmall.copyWith(
+                            color: AppColors.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
           // Map Type Selector
           Positioned(
-            top: 16 + MediaQuery.of(context).padding.top,
+            top: 16,
             right: 16,
             child: Column(
               children: [
@@ -527,7 +635,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
             right: 0,
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Colors.white.withAlpha((0.98 * 255).round()),
                 borderRadius: const BorderRadius.vertical(
                   top: Radius.circular(20),
                 ),
@@ -541,122 +649,134 @@ class _NavigationScreenState extends State<NavigationScreen> {
               ),
               child: SafeArea(
                 child: Padding(
-                  padding: const EdgeInsets.all(20),
+                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Instruction
+                      Align(
+                        child: Container(
+                          width: 44,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade300,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 14),
+
                       Row(
                         children: [
+                          Text('Live Navigation',
+                              style: AppTextStyles.titleLarge),
+                          const Spacer(),
                           Container(
-                            width: 50,
-                            height: 50,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 6),
                             decoration: BoxDecoration(
-                              color: AppColors.primary
-                                  .withAlpha((0.1 * 255).round()),
-                              borderRadius: BorderRadius.circular(12),
+                              color: AppColors.success
+                                  .withAlpha((0.12 * 255).round()),
+                              borderRadius: BorderRadius.circular(999),
                             ),
-                            child: Icon(
-                              _getInstructionIcon(),
-                              color: AppColors.primary,
-                              size: 28,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _currentInstruction,
-                                  style: AppTextStyles.titleLarge,
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _formatDistance(_distanceToNext),
-                                  style: AppTextStyles.bodyMedium.copyWith(
-                                    color: AppColors.onSurfaceVariant,
-                                  ),
-                                ),
-                              ],
+                            child: Text(
+                              'Safety ${widget.route.safetyScore.toStringAsFixed(1)}',
+                              style: AppTextStyles.labelSmall.copyWith(
+                                color: AppColors.success,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            onPressed: () => setState(() {
+                              _bottomPanelCollapsed = !_bottomPanelCollapsed;
+                            }),
+                            icon: Icon(_bottomPanelCollapsed
+                                ? Icons.expand_less
+                                : Icons.expand_more),
+                            tooltip: _bottomPanelCollapsed
+                                ? 'Expand panel'
+                                : 'Collapse panel',
+                          )
                         ],
                       ),
 
-                      const SizedBox(height: 16),
+                      if (!_bottomPanelCollapsed) const SizedBox(height: 14),
 
                       // Pothole Detection Toggle
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
+
+                      if (!_bottomPanelCollapsed)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.surface,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: AppColors.outline),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.sensors,
+                                color: AppColors.primary,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Pothole Detection',
+                                  style: AppTextStyles.titleSmall,
+                                ),
+                              ),
+                              Switch.adaptive(
+                                value: _isPotholeDetectionEnabled,
+                                onChanged: _togglePotholeDetection,
+                                activeColor: AppColors.primary,
+                              ),
+                            ],
+                          ),
                         ),
-                        decoration: BoxDecoration(
-                          color: AppColors.surface,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: AppColors.outline),
-                        ),
-                        child: Row(
+
+                      if (!_bottomPanelCollapsed) const SizedBox(height: 16),
+
+                      if (!_bottomPanelCollapsed)
+                        Row(
                           children: [
-                            const Icon(
-                              Icons.sensors,
-                              color: AppColors.primary,
-                              size: 20,
-                            ),
-                            const SizedBox(width: 8),
                             Expanded(
-                              child: Text(
-                                'Pothole Detection',
-                                style: AppTextStyles.titleSmall,
+                              child: _buildStatCard(
+                                'Remaining',
+                                _formatDistance(_remainingDistance),
+                                Icons.route,
                               ),
                             ),
-                            Switch.adaptive(
-                              value: _isPotholeDetectionEnabled,
-                              onChanged: _togglePotholeDetection,
-                              activeColor: AppColors.primary,
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: _buildStatCard(
+                                'Safety',
+                                widget.route.safetyScore.toStringAsFixed(1),
+                                Icons.shield,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Consumer<PotholeProvider>(
+                                builder: (context, potholeProvider, _) {
+                                  return _buildStatCard(
+                                    'Potholes',
+                                    '${potholeProvider.detectedCount}',
+                                    Icons.warning_amber,
+                                  );
+                                },
+                              ),
                             ),
                           ],
                         ),
-                      ),
 
-                      const SizedBox(height: 16),
-
-                      // Stats
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildStatCard(
-                              'Remaining',
-                              _formatDistance(_remainingDistance),
-                              Icons.route,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildStatCard(
-                              'Safety',
-                              widget.route.safetyScore.toStringAsFixed(1),
-                              Icons.shield,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Consumer<PotholeProvider>(
-                              builder: (context, potholeProvider, _) {
-                                return _buildStatCard(
-                                  'Potholes',
-                                  '${potholeProvider.detectedCount}',
-                                  Icons.warning_amber,
-                                );
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-
-                      const SizedBox(height: 16),
+                      if (!_bottomPanelCollapsed) const SizedBox(height: 16),
 
                       // Stop Button
                       SizedBox(
@@ -667,7 +787,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
                           label: const Text('End Navigation'),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.danger,
+                            foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
                           ),
                         ),
                       ),
@@ -726,7 +850,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: AppColors.surface.withAlpha((0.8 * 255).round()),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.outline),
       ),

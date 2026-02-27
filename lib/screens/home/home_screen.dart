@@ -8,6 +8,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/route_provider.dart';
 import '../../providers/user_provider.dart';
+import '../../services/route_service.dart';
 import '../routes/route_comparison_screen.dart';
 import '../sos/sos_screen.dart';
 
@@ -19,6 +20,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  final RouteService _routeService = RouteService();
   LatLng? currentLocation;
   bool isLoadingLocation = false;
   List<Map<String, dynamic>> recentRoutes =
@@ -64,12 +66,46 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadUserData() async {
     final userProvider = context.read<UserProvider>();
     await userProvider.fetchProfile();
+    await _loadRecentRoutes();
+  }
 
-    // TODO: Load recent routes from SharedPreferences or backend
-    // For now, leaving it empty to show placeholder
+  Future<void> _loadRecentRoutes() async {
+    final res = await _routeService.getRecentRoutes();
+    if (!mounted) return;
     setState(() {
-      recentRoutes = [];
+      recentRoutes = res.isSuccess ? (res.data ?? []) : [];
     });
+  }
+
+  bool _looksLikeCoordinates(String value) {
+    final v = value.trim();
+    final re = RegExp(r'^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$');
+    return re.hasMatch(v);
+  }
+
+  String _normalizePlace(String value, {required bool isOrigin}) {
+    if (value.trim().isEmpty)
+      return isOrigin ? 'Current Location' : 'Destination';
+    if (_looksLikeCoordinates(value)) {
+      return isOrigin ? 'Current Location' : 'Pinned Destination';
+    }
+    return value;
+  }
+
+  double _parseDistanceKm(String distanceText) {
+    final text = distanceText.trim().toLowerCase();
+    final numMatch = RegExp(r'([0-9]+(?:\.[0-9]+)?)').firstMatch(text);
+    if (numMatch == null) return 0;
+    final raw = double.tryParse(numMatch.group(1)!) ?? 0;
+    if (text.contains('km')) return raw;
+    if (text.contains('m')) return raw / 1000;
+    return raw;
+  }
+
+  double _parseSafety(dynamic safety) {
+    if (safety is num) return safety.toDouble();
+    if (safety is String) return double.tryParse(safety) ?? 0;
+    return 0;
   }
 
   @override
@@ -122,14 +158,15 @@ class _HomeScreenState extends State<HomeScreen> {
               bottom: 20,
               left: 20,
               child: FloatingActionButton.extended(
-                onPressed: () {
-                  Navigator.of(context).push(
+                onPressed: () async {
+                  await Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (_) => RouteComparisonScreen(
                         currentLocation: currentLocation!,
                       ),
                     ),
                   );
+                  await _loadRecentRoutes();
                 },
                 heroTag: 'fab_find_route',
                 label: const Text('Find Route'),
@@ -268,6 +305,17 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildKPIsSection() {
+    final totalRoutes = recentRoutes.length;
+    final avgSafety = totalRoutes == 0
+        ? 0.0
+        : recentRoutes
+                .map((r) => _parseSafety(r['safety']))
+                .fold<double>(0, (a, b) => a + b) /
+            totalRoutes;
+    final totalKm = recentRoutes
+        .map((r) => _parseDistanceKm((r['distance'] ?? '').toString()))
+        .fold<double>(0, (a, b) => a + b);
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Column(
@@ -281,7 +329,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: _buildStatCard(
                   icon: Icons.route,
                   title: 'Routes',
-                  value: '12',
+                  value: '$totalRoutes',
                   color: AppColors.primary,
                 ),
               ),
@@ -290,7 +338,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: _buildStatCard(
                   icon: Icons.shield_outlined,
                   title: 'Safety',
-                  value: '8.2',
+                  value: avgSafety.toStringAsFixed(1),
                   color: AppColors.success,
                 ),
               ),
@@ -299,7 +347,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: _buildStatCard(
                   icon: Icons.timeline,
                   title: 'Km',
-                  value: '24',
+                  value: totalKm.toStringAsFixed(1),
                   color: AppColors.info,
                 ),
               ),
@@ -495,12 +543,14 @@ class _HomeScreenState extends State<HomeScreen> {
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, index) {
         final route = recentRoutes[index];
+        final rawOrigin = (route['origin'] ?? 'Unknown').toString();
+        final rawDestination = (route['destination'] ?? 'Unknown').toString();
         return _buildRouteItem(
-          origin: route['origin'] ?? 'Unknown',
-          destination: route['destination'] ?? 'Unknown',
+          origin: _normalizePlace(rawOrigin, isOrigin: true),
+          destination: _normalizePlace(rawDestination, isOrigin: false),
           distance: route['distance'] ?? '0 km',
           duration: route['duration'] ?? '0 mins',
-          safety: route['safety'] ?? 0.0,
+          safety: _parseSafety(route['safety']),
           onTap: () {
             // TODO: Start navigation for this route
             if (currentLocation != null) {

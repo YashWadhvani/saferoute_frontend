@@ -28,7 +28,11 @@ class RouteComparisonScreen extends StatefulWidget {
 }
 
 class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
+  LatLng? selectedOrigin;
   LatLng? selectedDestination;
+  String _originLabel = 'Current Location';
+  String _destinationLabel = '';
+
   GoogleMapController? mapController;
 
   Set<Marker> markers = {};
@@ -44,22 +48,31 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
   ];
 
   // Search
-  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _fromController = TextEditingController();
+  final TextEditingController _toController = TextEditingController();
   List<AutocompleteSuggestion> _suggestions = [];
   bool _showSuggestions = false;
   bool _isSearching = false;
   Timer? _debounce;
   String? _sessionToken;
 
+  SearchField _activeSearchField = SearchField.to;
+  bool _showSearchPanel = true;
+  bool _routesPanelCollapsed = true;
+
   @override
   void initState() {
     super.initState();
+    selectedOrigin = widget.currentLocation;
+    _fromController.text = _originLabel;
     _generateSessionToken();
+    _updateMarkers();
   }
 
   @override
   void dispose() {
-    _searchController.dispose();
+    _fromController.dispose();
+    _toController.dispose();
     _debounce?.cancel();
     mapController?.dispose();
     super.dispose();
@@ -76,8 +89,13 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
   void _resetDestinationAndRoutes() {
     setState(() {
       selectedDestination = null;
+      _destinationLabel = '';
+      _toController.clear();
       markers.clear();
       polylines.clear();
+      _suggestions.clear();
+      _showSuggestions = false;
+      _routesPanelCollapsed = true;
     });
     context.read<RouteProvider>().clearRoutes();
   }
@@ -94,6 +112,8 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
 
     setState(() {
       selectedDestination = location;
+      _destinationLabel = 'Pinned Location';
+      _toController.text = _destinationLabel;
       _updateMarkers();
     });
 
@@ -114,20 +134,37 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
 
   void _updateMarkers() {
     markers = {
+      if (selectedOrigin != null)
+        Marker(
+          markerId: const MarkerId('origin'),
+          position: selectedOrigin!,
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          infoWindow: InfoWindow(title: _originLabel),
+        ),
       if (selectedDestination != null)
         Marker(
           markerId: const MarkerId('destination'),
           position: selectedDestination!,
+          infoWindow: InfoWindow(
+            title: _destinationLabel.isNotEmpty
+                ? _destinationLabel
+                : 'Destination',
+          ),
         ),
     };
   }
 
   // ---------------- ROUTES ----------------
   void _compareRoutes() {
-    if (selectedDestination == null) return;
-    context
-        .read<RouteProvider>()
-        .compareRoutes(widget.currentLocation, selectedDestination!);
+    if (selectedOrigin == null || selectedDestination == null) return;
+    setState(() => _routesPanelCollapsed = false);
+    context.read<RouteProvider>().compareRoutes(
+          selectedOrigin!,
+          selectedDestination!,
+          originName: _originLabel,
+          destinationName: _destinationLabel,
+        );
   }
 
   void _buildPolylines(List<RouteData> routes) {
@@ -171,13 +208,20 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
   }
 
   // ---------------- SEARCH ----------------
-  void _onSearchChanged(String q) {
+  void _onSearchChanged(String q, SearchField field) {
+    _activeSearchField = field;
     _debounce?.cancel();
 
     if (q.trim().isEmpty) {
-      _resetDestinationAndRoutes();
+      if (field == SearchField.to) {
+        _resetDestinationAndRoutes();
+      } else {
+        setState(() {
+          _suggestions.clear();
+          _showSuggestions = false;
+        });
+      }
       setState(() {
-        _suggestions.clear();
         _showSuggestions = false;
       });
       return;
@@ -230,7 +274,6 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
 
   Future<void> _onSuggestionSelected(AutocompleteSuggestion s) async {
     setState(() {
-      _searchController.text = s.mainText;
       _showSuggestions = false;
       _isSearching = true;
     });
@@ -249,17 +292,55 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
     final loc = res.data['location'];
     final lat = (loc['latitude'] as num).toDouble();
     final lng = (loc['longitude'] as num).toDouble();
+    final label = s.secondaryText.isNotEmpty
+        ? '${s.mainText}, ${s.secondaryText}'
+        : s.mainText;
 
     setState(() {
-      selectedDestination = LatLng(lat, lng);
+      if (_activeSearchField == SearchField.from) {
+        selectedOrigin = LatLng(lat, lng);
+        _originLabel = label;
+        _fromController.text = label;
+      } else {
+        selectedDestination = LatLng(lat, lng);
+        _destinationLabel = label;
+        _toController.text = label;
+      }
       _updateMarkers();
       _isSearching = false;
     });
 
     _generateSessionToken();
     mapController?.animateCamera(
-      CameraUpdate.newLatLngZoom(selectedDestination!, 15),
+      CameraUpdate.newLatLngZoom(
+        _activeSearchField == SearchField.from
+            ? selectedOrigin!
+            : selectedDestination!,
+        15,
+      ),
     );
+
+    _compareRoutes();
+  }
+
+  void _swapLocations() {
+    if (selectedDestination == null) return;
+
+    setState(() {
+      final tempLoc = selectedOrigin;
+      final tempLabel = _originLabel;
+
+      selectedOrigin = selectedDestination;
+      _originLabel =
+          _destinationLabel.isNotEmpty ? _destinationLabel : 'Selected Origin';
+
+      selectedDestination = tempLoc;
+      _destinationLabel = tempLabel;
+
+      _fromController.text = _originLabel;
+      _toController.text = _destinationLabel;
+      _updateMarkers();
+    });
 
     _compareRoutes();
   }
@@ -289,17 +370,15 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
         asset = 'assets/map_types/normal.png';
     }
 
-    return Expanded(
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: Image.asset(
-          asset,
-          fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) {
-            // fallback if asset still fails
-            return const Icon(Icons.layers, color: AppColors.primary);
-          },
-        ),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Image.asset(
+        asset,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) {
+          // fallback if asset still fails
+          return const Icon(Icons.layers, color: AppColors.primary);
+        },
       ),
     );
   }
@@ -307,14 +386,23 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
   // ---------------- UI ----------------
   @override
   Widget build(BuildContext context) {
+    final routeProvider = context.watch<RouteProvider>();
+    final mapBottomPadding = routeProvider.routes.isEmpty
+        ? 24.0
+        : (_routesPanelCollapsed ? 120.0 : 320.0);
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Find Safe Route')),
+      appBar: AppBar(
+        title: const Text('Find Safe Route'),
+        elevation: 0,
+        backgroundColor: Colors.white,
+      ),
       body: Stack(
         children: [
           GoogleMap(
             onMapCreated: (c) => mapController = c,
             initialCameraPosition: CameraPosition(
-              target: widget.currentLocation,
+              target: selectedOrigin ?? widget.currentLocation,
               zoom: 14,
             ),
             mapType: _mapType,
@@ -331,35 +419,161 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
             tiltGesturesEnabled: true,
             trafficEnabled: true,
             buildingsEnabled: true,
-            padding: const EdgeInsets.only(bottom: 300),
+            padding: EdgeInsets.only(bottom: mapBottomPadding),
           ),
 
-          // Search bar
+          // Search panel
           Positioned(
             top: 16,
             left: 16,
-            right: 80,
+            right: 16,
             child: Column(
               children: [
-                TextField(
-                  controller: _searchController,
-                  onChanged: _onSearchChanged,
-                  decoration: InputDecoration(
-                    hintText: 'Search destination...',
-                    filled: true,
-                    fillColor: Colors.white,
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _searchController.text.isNotEmpty
-                        ? IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: _resetDestinationAndRoutes,
-                          )
-                        : null,
+                if (_showSearchPanel)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withAlpha((0.96 * 255).round()),
+                      borderRadius: BorderRadius.circular(18),
+                      boxShadow: const [
+                        BoxShadow(
+                          blurRadius: 16,
+                          offset: Offset(0, 6),
+                          color: Colors.black26,
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          children: [
+                            Text('Route planner',
+                                style: AppTextStyles.titleSmall),
+                            const Spacer(),
+                            IconButton(
+                              onPressed: () =>
+                                  setState(() => _showSearchPanel = false),
+                              icon: const Icon(Icons.keyboard_arrow_up),
+                              tooltip: 'Collapse',
+                            ),
+                          ],
+                        ),
+                        TextField(
+                          controller: _fromController,
+                          onChanged: (v) =>
+                              _onSearchChanged(v, SearchField.from),
+                          decoration: InputDecoration(
+                            hintText: 'From (origin)',
+                            prefixIcon: const Icon(Icons.trip_origin),
+                            suffixIcon: _fromController.text.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.close),
+                                    onPressed: () {
+                                      setState(() {
+                                        _fromController.text =
+                                            'Current Location';
+                                        _originLabel = 'Current Location';
+                                        selectedOrigin = widget.currentLocation;
+                                        _updateMarkers();
+                                      });
+                                      _compareRoutes();
+                                    },
+                                  )
+                                : null,
+                            filled: true,
+                            fillColor: AppColors.surface,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide.none,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: _toController,
+                                onChanged: (v) =>
+                                    _onSearchChanged(v, SearchField.to),
+                                decoration: InputDecoration(
+                                  hintText: 'To (destination)',
+                                  prefixIcon: const Icon(Icons.place),
+                                  suffixIcon: _toController.text.isNotEmpty
+                                      ? IconButton(
+                                          icon: const Icon(Icons.clear),
+                                          onPressed: _resetDestinationAndRoutes,
+                                        )
+                                      : null,
+                                  filled: true,
+                                  fillColor: AppColors.surface,
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide.none,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              onPressed: _swapLocations,
+                              icon: const Icon(Icons.swap_vert_circle),
+                              color: AppColors.primary,
+                              tooltip: 'Swap From/To',
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: (selectedOrigin != null &&
+                                    selectedDestination != null)
+                                ? _compareRoutes
+                                : null,
+                            icon: const Icon(Icons.route),
+                            label: const Text('Find Safest Routes'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: ElevatedButton.icon(
+                      onPressed: () => setState(() => _showSearchPanel = true),
+                      icon: const Icon(Icons.search),
+                      label: const Text('Search places'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: AppColors.onSurface,
+                        elevation: 4,
+                      ),
+                    ),
                   ),
-                ),
                 if (_showSuggestions)
                   Container(
-                    color: Colors.white,
+                    margin: const EdgeInsets.only(top: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: const [
+                        BoxShadow(
+                          blurRadius: 10,
+                          color: Colors.black26,
+                          offset: Offset(0, 4),
+                        ),
+                      ],
+                    ),
                     constraints: const BoxConstraints(maxHeight: 300),
                     child: _isSearching
                         ? const Padding(
@@ -387,7 +601,7 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
 
           // Map type toggle
           Positioned(
-            top: 16,
+            top: _showSearchPanel ? 220 : 70,
             right: 16,
             child: GestureDetector(
               onTap: _rotateMapType,
@@ -419,6 +633,35 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
                 );
               }
 
+              if (rp.isLoading) {
+                return const Positioned(
+                  bottom: 130,
+                  left: 0,
+                  right: 0,
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+
+              if (rp.error != null && rp.routes.isEmpty) {
+                return Positioned(
+                  bottom: 130,
+                  left: 16,
+                  right: 16,
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      rp.error!,
+                      textAlign: TextAlign.center,
+                      style: AppTextStyles.bodyMedium,
+                    ),
+                  ),
+                );
+              }
+
               if (rp.routes.isEmpty) return const SizedBox();
 
               return Positioned(
@@ -429,35 +672,80 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
                   elevation: 12,
                   borderRadius:
                       const BorderRadius.vertical(top: Radius.circular(20)),
-                  color: Colors.white,
-                  child: SizedBox(
-                    height: 300,
-                    child: ListView.builder(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      itemCount: rp.routes.length,
-                      itemBuilder: (_, i) {
-                        final r = rp.routes[i];
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 4),
-                          child: RouteCard(
-                            route: r,
-                            isSelected: rp.selectedRoute?.id == r.id,
-                            onTap: () => rp.selectRoute(r),
-                            onStart: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => NavigationScreen(
-                                    start: widget.currentLocation,
-                                    route: r,
-                                  ),
-                                ),
-                              );
-                            },
+                  color: Colors.white.withAlpha((0.98 * 255).round()),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    height: _routesPanelCollapsed ? 96 : 340,
+                    child: Column(
+                      children: [
+                        const SizedBox(height: 8),
+                        Container(
+                          width: 44,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade300,
+                            borderRadius: BorderRadius.circular(4),
                           ),
-                        );
-                      },
+                        ),
+                        const SizedBox(height: 8),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Row(
+                            children: [
+                              Text('Route Options',
+                                  style: AppTextStyles.titleMedium),
+                              const Spacer(),
+                              Text('${rp.routes.length} found',
+                                  style: AppTextStyles.labelSmall),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                onPressed: () => setState(() {
+                                  _routesPanelCollapsed =
+                                      !_routesPanelCollapsed;
+                                }),
+                                icon: Icon(_routesPanelCollapsed
+                                    ? Icons.expand_less
+                                    : Icons.expand_more),
+                                tooltip: _routesPanelCollapsed
+                                    ? 'Expand routes'
+                                    : 'Collapse routes',
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (!_routesPanelCollapsed) const SizedBox(height: 4),
+                        if (!_routesPanelCollapsed)
+                          Expanded(
+                            child: ListView.builder(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              itemCount: rp.routes.length,
+                              itemBuilder: (_, i) {
+                                final r = rp.routes[i];
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 4),
+                                  child: RouteCard(
+                                    route: r,
+                                    isSelected: rp.selectedRoute?.id == r.id,
+                                    onTap: () => rp.selectRoute(r),
+                                    onStart: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => NavigationScreen(
+                                            start: selectedOrigin ??
+                                                widget.currentLocation,
+                                            route: r,
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
@@ -469,6 +757,8 @@ class _RouteComparisonScreenState extends State<RouteComparisonScreen> {
     );
   }
 }
+
+enum SearchField { from, to }
 
 // ---------------- MODEL ----------------
 class AutocompleteSuggestion {

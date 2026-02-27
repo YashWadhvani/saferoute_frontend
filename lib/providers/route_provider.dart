@@ -18,7 +18,12 @@ class RouteProvider extends ChangeNotifier {
   RouteData? get selectedRoute => _selectedRoute;
 
   /// Compare routes between origin and destination
-  Future<void> compareRoutes(LatLng origin, LatLng destination) async {
+  Future<void> compareRoutes(
+    LatLng origin,
+    LatLng destination, {
+    String? originName,
+    String? destinationName,
+  }) async {
     _isLoading = true;
     _error = null;
     _routes = [];
@@ -28,6 +33,8 @@ class RouteProvider extends ChangeNotifier {
     final response = await _routeService.compareRoutes(
       origin: origin,
       destination: destination,
+      originName: originName,
+      destinationName: destinationName,
     );
     _isLoading = false;
 
